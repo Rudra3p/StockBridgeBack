@@ -1,0 +1,24 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stockbridge}
+    username: ${SPRING_DATASOURCE_USERNAME:stockbridge}
+    password: ${SPRING_DATASOURCE_PASSWORD:stockbridge}
+    driver-class-name: org.postgresql.Driver
+
+backend:
+  api-key: ${BACKEND_API_KEY:dev-stockbridge-api-key-2026}
+
+jwt:
+  secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
+  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+cors:
+  allowed-origins: ${ALLOWED_ORIGINS:http://localhost:3000}
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
