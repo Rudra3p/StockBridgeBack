@@ -26,11 +26,11 @@ public class DatabaseConfig {
                     String userInfo = uri.getUserInfo();
                     if (userInfo != null && !userInfo.isEmpty()) {
                         String[] parts = userInfo.split(":", 2);
-                        if (parts.length > 0 && (properties.getUsername() == null || properties.getUsername().isBlank())) {
+                        if (parts.length > 0 && !parts[0].isBlank()) {
                             String user = URLDecoder.decode(parts[0], StandardCharsets.UTF_8);
                             properties.setUsername(user);
                         }
-                        if (parts.length > 1 && (properties.getPassword() == null || properties.getPassword().isBlank())) {
+                        if (parts.length > 1 && !parts[1].isBlank()) {
                             String pass = URLDecoder.decode(parts[1], StandardCharsets.UTF_8);
                             properties.setPassword(pass);
                         }
@@ -40,9 +40,14 @@ public class DatabaseConfig {
                     String path = uri.getPath() != null ? uri.getPath() : "";
                     String query = uri.getQuery() != null && !uri.getQuery().isBlank() ? "?" + uri.getQuery() : "";
 
+                    // Supabase requires SSL
+                    if (uri.getHost() != null && uri.getHost().contains("supabase") && !query.contains("sslmode")) {
+                        query = query.isEmpty() ? "?sslmode=require" : query + "&sslmode=require";
+                    }
+
                     String jdbcUrl = "jdbc:postgresql://" + uri.getHost() + ":" + port + path + query;
                     properties.setUrl(jdbcUrl);
-                    log.info("Sanitized Render database URL to JDBC format for host: {}:{}", uri.getHost(), port);
+                    log.info("Sanitized Render database URL to JDBC format for host: {}:{} (user: {})", uri.getHost(), port, properties.getUsername());
                 } catch (Exception e) {
                     log.warn("Could not parse URI directly, falling back to prefix replacement: {}", e.getMessage());
                     if (url.startsWith("postgres://")) {
