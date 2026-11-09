@@ -27,7 +27,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     public static final String API_KEY_HEADER = "X-API-KEY";
 
-    @Value("${backend.api-key:#{null}}")
+    @Value("${backend.api-key:}")
     private String configuredApiKey;
 
     @PostConstruct
