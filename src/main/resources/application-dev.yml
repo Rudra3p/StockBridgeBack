@@ -4,6 +4,10 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:stockbridge}
     password: ${SPRING_DATASOURCE_PASSWORD:stockbridge}
     driver-class-name: org.postgresql.Driver
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/stockbridge}
+      database: ${MONGODB_DATABASE:stockbridge}
 
 backend:
   api-key: ${BACKEND_API_KEY:dev-stockbridge-api-key-2026}
