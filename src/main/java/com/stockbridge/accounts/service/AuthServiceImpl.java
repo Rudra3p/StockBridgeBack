@@ -46,6 +46,10 @@ public class AuthServiceImpl implements AuthService {
         }
 
         String normalizedEmail = request.getEmail().trim().toLowerCase();
+        String normalizedPhone = request.getPhone() != null ? request.getPhone().trim() : "";
+        if ("rudra090207@gmail.com".equalsIgnoreCase(normalizedEmail) || "7016047658".equals(normalizedPhone)) {
+            throw new BadRequestException("Master Administrator account cannot be registered via public registration.");
+        }
         if (userRepository.existsByEmail(normalizedEmail)) {
             throw new DuplicateResourceException("An account with email '" + normalizedEmail + "' already exists.");
         }
