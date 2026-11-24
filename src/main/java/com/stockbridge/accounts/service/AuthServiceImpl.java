@@ -30,6 +30,8 @@ public class AuthServiceImpl implements AuthService {
 
     private final UserRepository userRepository;
     private final OrganisationRepository organisationRepository;
+    private final com.stockbridge.accounts.repository.PartnerSellerRepository partnerSellerRepository;
+    private final com.stockbridge.accounts.repository.WholesaleBuyerRepository wholesaleBuyerRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
@@ -73,7 +75,29 @@ public class AuthServiceImpl implements AuthService {
 
         Organisation savedOrg = organisationRepository.save(organisation);
 
-        // 2. Create User linked to Organisation
+        // 2. Persist to dedicated role table as well as unified security table
+        if (request.getRole() == Role.SELLER) {
+            com.stockbridge.accounts.entity.PartnerSeller partnerSeller = com.stockbridge.accounts.entity.PartnerSeller.builder()
+                    .organisation(savedOrg)
+                    .fullName(request.getFullName().trim())
+                    .email(normalizedEmail)
+                    .phone(request.getPhone().trim())
+                    .passwordHash(passwordEncoder.encode(request.getPassword()))
+                    .enabled(true)
+                    .build();
+            partnerSellerRepository.save(partnerSeller);
+        } else if (request.getRole() == Role.BUYER) {
+            com.stockbridge.accounts.entity.WholesaleBuyer wholesaleBuyer = com.stockbridge.accounts.entity.WholesaleBuyer.builder()
+                    .organisation(savedOrg)
+                    .fullName(request.getFullName().trim())
+                    .email(normalizedEmail)
+                    .phone(request.getPhone().trim())
+                    .passwordHash(passwordEncoder.encode(request.getPassword()))
+                    .enabled(true)
+                    .build();
+            wholesaleBuyerRepository.save(wholesaleBuyer);
+        }
+
         AppUser user = AppUser.builder()
                 .organisation(savedOrg)
                 .fullName(request.getFullName().trim())
@@ -105,11 +129,19 @@ public class AuthServiceImpl implements AuthService {
             String token = jwtService.generateToken(userPrincipal);
             AppUser user = userPrincipal.getAppUser();
 
+            // Table-level role verification
+            Role verifiedRole = user.getRole();
+            if (partnerSellerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
+                verifiedRole = Role.SELLER;
+            } else if (wholesaleBuyerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
+                verifiedRole = Role.BUYER;
+            }
+
             UserInfoResponse userInfo = UserInfoResponse.builder()
                     .id(user.getId())
                     .name(user.getFullName())
                     .email(user.getEmail())
-                    .role(user.getRole())
+                    .role(verifiedRole)
                     .organisationId(user.getOrganisation().getId())
                     .verificationStatus(user.getOrganisation().getVerificationStatus())
                     .build();
