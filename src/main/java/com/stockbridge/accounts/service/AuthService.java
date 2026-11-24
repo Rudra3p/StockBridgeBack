@@ -9,4 +9,5 @@ public interface AuthService {
     UserProfileResponse register(RegisterRequest request);
     AuthResponse login(LoginRequest request);
     UserProfileResponse getCurrentUser(String email);
+    UserProfileResponse getCurrentUser(com.stockbridge.security.UserPrincipal principal);
 }

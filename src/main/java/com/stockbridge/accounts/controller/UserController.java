@@ -26,6 +26,10 @@ public class UserController {
     @Operation(summary = "Get current authenticated user profile",
                description = "Requires a valid JWT token. Returns current user details and their associated organisation info.")
     public ResponseEntity<UserProfileResponse> getCurrentUser(@AuthenticationPrincipal UserDetails userDetails) {
+        if (userDetails instanceof com.stockbridge.security.UserPrincipal principal) {
+            UserProfileResponse response = authService.getCurrentUser(principal);
+            return ResponseEntity.ok(response);
+        }
         UserProfileResponse response = authService.getCurrentUser(userDetails.getUsername());
         return ResponseEntity.ok(response);
     }

@@ -3,10 +3,13 @@ package com.stockbridge.accounts.service;
 import java.util.List;
 import java.util.UUID;
 import com.stockbridge.accounts.dto.*;
+import com.stockbridge.accounts.entity.AdminUser;
 import com.stockbridge.accounts.entity.AppUser;
 import com.stockbridge.accounts.entity.Organisation;
+import com.stockbridge.accounts.entity.PartnerSeller;
 import com.stockbridge.accounts.entity.Role;
 import com.stockbridge.accounts.entity.VerificationStatus;
+import com.stockbridge.accounts.entity.WholesaleBuyer;
 import com.stockbridge.accounts.repository.OrganisationRepository;
 import com.stockbridge.accounts.repository.UserRepository;
 import com.stockbridge.common.exceptions.BadRequestException;
@@ -233,6 +236,36 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional(readOnly = true)
+    public UserProfileResponse getCurrentUser(UserPrincipal principal) {
+        Role role = principal.getRole();
+        String normalizedEmail = principal.getEmail().trim().toLowerCase();
+
+        if (role == Role.SELLER) {
+            var sellerOpt = partnerSellerRepository.findByEmailIgnoreCase(normalizedEmail);
+            if (sellerOpt.isPresent()) {
+                return mapToUserProfileResponse(sellerOpt.get());
+            }
+        } else if (role == Role.BUYER) {
+            var buyerOpt = wholesaleBuyerRepository.findByEmailIgnoreCase(normalizedEmail);
+            if (buyerOpt.isPresent()) {
+                return mapToUserProfileResponse(buyerOpt.get());
+            }
+        } else if (role == Role.ADMIN) {
+            var adminOpt = adminUserRepository.findByEmailIgnoreCase(normalizedEmail);
+            if (adminOpt.isPresent()) {
+                return mapToUserProfileResponse(adminOpt.get());
+            }
+        }
+
+        if (principal.getAppUser() != null) {
+            return mapToUserProfileResponse(principal.getAppUser());
+        }
+
+        return getCurrentUser(normalizedEmail);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public UserProfileResponse getCurrentUser(String email) {
         String normalizedEmail = email.trim().toLowerCase();
         List<AppUser> users = userRepository.findAllByEmail(normalizedEmail);
@@ -240,6 +273,75 @@ public class AuthServiceImpl implements AuthService {
             throw new ResourceNotFoundException("User not found with email: " + email);
         }
         return mapToUserProfileResponse(users.get(0));
+    }
+
+    private UserProfileResponse mapToUserProfileResponse(PartnerSeller seller) {
+        Organisation org = seller.getOrganisation();
+        OrganisationSummaryDto orgSummary = org != null ? OrganisationSummaryDto.builder()
+                .id(org.getId())
+                .legalName(org.getLegalName())
+                .orgType(org.getOrgType())
+                .gstNumber(org.getGstNumber())
+                .addressLine(org.getAddressLine())
+                .city(org.getCity())
+                .state(org.getState())
+                .pinCode(org.getPinCode())
+                .verificationStatus(org.getVerificationStatus())
+                .createdAt(org.getCreatedAt())
+                .updatedAt(org.getUpdatedAt())
+                .build() : null;
+
+        return UserProfileResponse.builder()
+                .id(seller.getId())
+                .fullName(seller.getFullName())
+                .email(seller.getEmail())
+                .phone(seller.getPhone())
+                .role(Role.SELLER)
+                .enabled(seller.isEnabled())
+                .createdAt(seller.getCreatedAt())
+                .organisation(orgSummary)
+                .build();
+    }
+
+    private UserProfileResponse mapToUserProfileResponse(WholesaleBuyer buyer) {
+        Organisation org = buyer.getOrganisation();
+        OrganisationSummaryDto orgSummary = org != null ? OrganisationSummaryDto.builder()
+                .id(org.getId())
+                .legalName(org.getLegalName())
+                .orgType(org.getOrgType())
+                .gstNumber(org.getGstNumber())
+                .addressLine(org.getAddressLine())
+                .city(org.getCity())
+                .state(org.getState())
+                .pinCode(org.getPinCode())
+                .verificationStatus(org.getVerificationStatus())
+                .createdAt(org.getCreatedAt())
+                .updatedAt(org.getUpdatedAt())
+                .build() : null;
+
+        return UserProfileResponse.builder()
+                .id(buyer.getId())
+                .fullName(buyer.getFullName())
+                .email(buyer.getEmail())
+                .phone(buyer.getPhone())
+                .role(Role.BUYER)
+                .enabled(buyer.isEnabled())
+                .createdAt(buyer.getCreatedAt())
+                .organisation(orgSummary)
+                .build();
+    }
+
+    private UserProfileResponse mapToUserProfileResponse(AdminUser admin) {
+        return UserProfileResponse.builder()
+                .id(admin.getId())
+                .fullName(admin.getFullName())
+                .email(admin.getEmail())
+                .phone(admin.getPhone())
+                .role(Role.ADMIN)
+                .enabled(admin.isEnabled())
+                .createdAt(admin.getCreatedAt())
+                .organisation(null)
+                .build();
     }
 
     private UserProfileResponse mapToUserProfileResponse(AppUser user) {
