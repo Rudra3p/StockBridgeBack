@@ -44,7 +44,7 @@ backend:
   api-key: test-stockbridge-api-key-2026
 
 jwt:
-  secret: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
+  secret: test_in_memory_jwt_secret_key_at_least_32_bytes_long_for_h2_tests
   expiration-ms: 86400000
 
 cors:
