@@ -1,5 +1,6 @@
 package com.stockbridge.accounts.service;
 
+import java.util.List;
 import com.stockbridge.accounts.dto.*;
 import com.stockbridge.accounts.entity.AppUser;
 import com.stockbridge.accounts.entity.Organisation;
@@ -48,58 +49,59 @@ public class AuthServiceImpl implements AuthService {
         }
 
         String normalizedEmail = request.getEmail().trim().toLowerCase();
-        String normalizedPhone = request.getPhone() != null ? request.getPhone().trim() : "";
-        if ("rudra090207@gmail.com".equalsIgnoreCase(normalizedEmail) || "7016047658".equals(normalizedPhone)) {
-            throw new BadRequestException("Master Administrator account cannot be registered via public registration.");
-        }
-        if (userRepository.existsByEmail(normalizedEmail)) {
-            throw new DuplicateResourceException("An account with email '" + normalizedEmail + "' already exists.");
+
+        // Check if an account already exists for THIS specific role
+        if (userRepository.existsByEmailAndRole(normalizedEmail, request.getRole())) {
+            throw new DuplicateResourceException("An account with email '" + normalizedEmail + "' is already registered as " + request.getRole() + ".");
         }
 
         String normalizedGst = request.getGstNumber().trim().toUpperCase();
-        if (organisationRepository.existsByGstNumber(normalizedGst)) {
-            throw new DuplicateResourceException("An organisation with GST number '" + normalizedGst + "' already exists.");
-        }
 
-        // 1. Create Organisation with PENDING status
-        Organisation organisation = Organisation.builder()
-                .legalName(request.getLegalName().trim())
-                .orgType(request.getOrgType())
-                .gstNumber(normalizedGst)
-                .addressLine(request.getAddressLine().trim())
-                .city(request.getCity().trim())
-                .state(request.getState().trim())
-                .pinCode(request.getPinCode().trim())
-                .verificationStatus(VerificationStatus.PENDING)
-                .build();
-
-        Organisation savedOrg = organisationRepository.save(organisation);
+        // 1. Find existing Organisation with this GST or create new one
+        Organisation organisation = organisationRepository.findByGstNumber(normalizedGst)
+                .orElseGet(() -> {
+                    Organisation newOrg = Organisation.builder()
+                            .legalName(request.getLegalName().trim())
+                            .orgType(request.getOrgType())
+                            .gstNumber(normalizedGst)
+                            .addressLine(request.getAddressLine().trim())
+                            .city(request.getCity().trim())
+                            .state(request.getState().trim())
+                            .pinCode(request.getPinCode().trim())
+                            .verificationStatus(VerificationStatus.PENDING)
+                            .build();
+                    return organisationRepository.save(newOrg);
+                });
 
         // 2. Persist to dedicated role table as well as unified security table
         if (request.getRole() == Role.SELLER) {
-            com.stockbridge.accounts.entity.PartnerSeller partnerSeller = com.stockbridge.accounts.entity.PartnerSeller.builder()
-                    .organisation(savedOrg)
-                    .fullName(request.getFullName().trim())
-                    .email(normalizedEmail)
-                    .phone(request.getPhone().trim())
-                    .passwordHash(passwordEncoder.encode(request.getPassword()))
-                    .enabled(true)
-                    .build();
-            partnerSellerRepository.save(partnerSeller);
+            if (!partnerSellerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
+                com.stockbridge.accounts.entity.PartnerSeller partnerSeller = com.stockbridge.accounts.entity.PartnerSeller.builder()
+                        .organisation(organisation)
+                        .fullName(request.getFullName().trim())
+                        .email(normalizedEmail)
+                        .phone(request.getPhone().trim())
+                        .passwordHash(passwordEncoder.encode(request.getPassword()))
+                        .enabled(true)
+                        .build();
+                partnerSellerRepository.save(partnerSeller);
+            }
         } else if (request.getRole() == Role.BUYER) {
-            com.stockbridge.accounts.entity.WholesaleBuyer wholesaleBuyer = com.stockbridge.accounts.entity.WholesaleBuyer.builder()
-                    .organisation(savedOrg)
-                    .fullName(request.getFullName().trim())
-                    .email(normalizedEmail)
-                    .phone(request.getPhone().trim())
-                    .passwordHash(passwordEncoder.encode(request.getPassword()))
-                    .enabled(true)
-                    .build();
-            wholesaleBuyerRepository.save(wholesaleBuyer);
+            if (!wholesaleBuyerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
+                com.stockbridge.accounts.entity.WholesaleBuyer wholesaleBuyer = com.stockbridge.accounts.entity.WholesaleBuyer.builder()
+                        .organisation(organisation)
+                        .fullName(request.getFullName().trim())
+                        .email(normalizedEmail)
+                        .phone(request.getPhone().trim())
+                        .passwordHash(passwordEncoder.encode(request.getPassword()))
+                        .enabled(true)
+                        .build();
+                wholesaleBuyerRepository.save(wholesaleBuyer);
+            }
         }
 
         AppUser user = AppUser.builder()
-                .organisation(savedOrg)
+                .organisation(organisation)
                 .fullName(request.getFullName().trim())
                 .email(normalizedEmail)
                 .phone(request.getPhone().trim())
@@ -111,7 +113,7 @@ public class AuthServiceImpl implements AuthService {
         AppUser savedUser = userRepository.save(user);
 
         log.info("Successfully registered user '{}' with role '{}' for organisation '{}' (id: {})",
-                savedUser.getEmail(), savedUser.getRole(), savedOrg.getLegalName(), savedOrg.getId());
+                savedUser.getEmail(), savedUser.getRole(), organisation.getLegalName(), organisation.getId());
 
         return mapToUserProfileResponse(savedUser);
     }
@@ -120,50 +122,60 @@ public class AuthServiceImpl implements AuthService {
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
         String normalizedEmail = request.getEmail().trim().toLowerCase();
-        try {
-            Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(normalizedEmail, request.getPassword())
-            );
+        Role targetRole = request.getRole();
 
-            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
-            String token = jwtService.generateToken(userPrincipal);
-            AppUser user = userPrincipal.getAppUser();
-
-            // Table-level role verification
-            Role verifiedRole = user.getRole();
-            if (partnerSellerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
-                verifiedRole = Role.SELLER;
-            } else if (wholesaleBuyerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
-                verifiedRole = Role.BUYER;
+        AppUser user;
+        if (targetRole != null) {
+            user = userRepository.findByEmailAndRole(normalizedEmail, targetRole)
+                    .orElseThrow(() -> new BadCredentialsException("No " + targetRole + " account found with email: " + normalizedEmail));
+        } else {
+            List<AppUser> users = userRepository.findAllByEmail(normalizedEmail);
+            if (users.isEmpty()) {
+                throw new BadCredentialsException("Invalid email or password");
             }
+            // Find user whose password matches
+            user = users.stream()
+                    .filter(u -> passwordEncoder.matches(request.getPassword(), u.getPasswordHash()))
+                    .findFirst()
+                    .orElse(users.get(0));
+        }
 
-            UserInfoResponse userInfo = UserInfoResponse.builder()
-                    .id(user.getId())
-                    .name(user.getFullName())
-                    .email(user.getEmail())
-                    .role(verifiedRole)
-                    .organisationId(user.getOrganisation().getId())
-                    .verificationStatus(user.getOrganisation().getVerificationStatus())
-                    .build();
-
-            return AuthResponse.builder()
-                    .token(token)
-                    .user(userInfo)
-                    .build();
-
-        } catch (AuthenticationException e) {
-            log.warn("Failed authentication attempt for email '{}'", normalizedEmail);
+        if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
+            log.warn("Failed password authentication attempt for email '{}'", normalizedEmail);
             throw new BadCredentialsException("Invalid email or password");
         }
+
+        if (!user.isEnabled()) {
+            throw new BadCredentialsException("Account is disabled. Please contact support.");
+        }
+
+        UserPrincipal userPrincipal = new UserPrincipal(user);
+        String token = jwtService.generateToken(userPrincipal);
+
+        UserInfoResponse userInfo = UserInfoResponse.builder()
+                .id(user.getId())
+                .name(user.getFullName())
+                .email(user.getEmail())
+                .role(user.getRole())
+                .organisationId(user.getOrganisation().getId())
+                .verificationStatus(user.getOrganisation().getVerificationStatus())
+                .build();
+
+        return AuthResponse.builder()
+                .token(token)
+                .user(userInfo)
+                .build();
     }
 
     @Override
     @Transactional(readOnly = true)
     public UserProfileResponse getCurrentUser(String email) {
-        AppUser user = userRepository.findByEmail(email.trim().toLowerCase())
-                .orElseThrow(() -> new ResourceNotFoundException("User not found with email: " + email));
-
-        return mapToUserProfileResponse(user);
+        String normalizedEmail = email.trim().toLowerCase();
+        List<AppUser> users = userRepository.findAllByEmail(normalizedEmail);
+        if (users.isEmpty()) {
+            throw new ResourceNotFoundException("User not found with email: " + email);
+        }
+        return mapToUserProfileResponse(users.get(0));
     }
 
     private UserProfileResponse mapToUserProfileResponse(AppUser user) {

@@ -8,7 +8,9 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "app_user")
+@Table(name = "app_user", uniqueConstraints = {
+    @UniqueConstraint(name = "uk_app_user_email_role", columnNames = {"email", "role"})
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -27,7 +29,7 @@ public class AppUser {
     @Column(name = "full_name", nullable = false)
     private String fullName;
 
-    @Column(name = "email", nullable = false, unique = true)
+    @Column(name = "email", nullable = false)
     private String email;
 
     @Column(name = "phone", nullable = false, length = 50)

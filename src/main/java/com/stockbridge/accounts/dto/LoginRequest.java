@@ -1,5 +1,6 @@
 package com.stockbridge.accounts.dto;
 
+import com.stockbridge.accounts.entity.Role;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -22,4 +23,7 @@ public class LoginRequest {
     @NotBlank(message = "Password is required")
     @Schema(example = "admin123")
     private String password;
+
+    @Schema(example = "BUYER", description = "Optional target role: BUYER, SELLER, or ADMIN")
+    private Role role;
 }

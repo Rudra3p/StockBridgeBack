@@ -35,7 +35,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 String username = jwtService.extractUsername(jwt);
 
                 if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                    UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                    String roleStr = jwtService.extractRole(jwt);
+                    UserDetails userDetails;
+                    if (roleStr != null) {
+                        try {
+                            com.stockbridge.accounts.entity.Role role = com.stockbridge.accounts.entity.Role.valueOf(roleStr);
+                            userDetails = userDetailsService.loadUserByEmailAndRole(username, role);
+                        } catch (Exception e) {
+                            userDetails = userDetailsService.loadUserByUsername(username);
+                        }
+                    } else {
+                        userDetails = userDetailsService.loadUserByUsername(username);
+                    }
 
                     if (jwtService.isTokenValid(jwt, userDetails)) {
                         UsernamePasswordAuthenticationToken authentication =
