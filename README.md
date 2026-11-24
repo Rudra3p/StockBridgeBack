@@ -1513,6 +1513,9 @@ Include:
 
 **GitHub:** [@realHarshCodes](https://github.com/realHarshCodes)
 
+
+
+
 **Contribution:** Frontend–Backend–Cloud–Database Architecture Design
 
 Contributed to the architectural design of the StockBridge platform, focusing on how the frontend application, Spring Boot backend, cloud infrastructure, and databases interact within a unified system.
