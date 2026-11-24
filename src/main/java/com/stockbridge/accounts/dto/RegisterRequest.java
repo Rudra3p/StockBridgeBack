@@ -44,8 +44,7 @@ public class RegisterRequest {
     @Schema(example = "Karnataka")
     private String state;
 
-    @NotBlank(message = "PIN code is required")
-    @Schema(example = "560058")
+    @Schema(example = "560058", description = "Optional postal code")
     private String pinCode;
 
     // User details

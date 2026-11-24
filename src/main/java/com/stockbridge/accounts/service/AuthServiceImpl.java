@@ -64,6 +64,9 @@ public class AuthServiceImpl implements AuthService {
         }
 
         String normalizedGst = request.getGstNumber().trim().toUpperCase();
+        String resolvedPin = (request.getPinCode() != null && !request.getPinCode().isBlank())
+                ? request.getPinCode().trim()
+                : "000000";
 
         // 2. Find existing Organisation with this GST or create new one
         Organisation organisation = organisationRepository.findByGstNumber(normalizedGst)
@@ -75,7 +78,7 @@ public class AuthServiceImpl implements AuthService {
                             .addressLine(request.getAddressLine().trim())
                             .city(request.getCity().trim())
                             .state(request.getState().trim())
-                            .pinCode(request.getPinCode().trim())
+                            .pinCode(resolvedPin)
                             .verificationStatus(VerificationStatus.PENDING)
                             .build();
                     return organisationRepository.save(newOrg);
@@ -83,8 +86,7 @@ public class AuthServiceImpl implements AuthService {
 
         String encodedPassword = passwordEncoder.encode(request.getPassword());
 
-        // 3. Persist to dedicated separate table
-        UUID savedId;
+        // 3. Persist to dedicated separate table (zero single-table collisions)
         if (request.getRole() == Role.SELLER) {
             com.stockbridge.accounts.entity.PartnerSeller partnerSeller = com.stockbridge.accounts.entity.PartnerSeller.builder()
                     .organisation(organisation)
@@ -94,7 +96,10 @@ public class AuthServiceImpl implements AuthService {
                     .passwordHash(encodedPassword)
                     .enabled(true)
                     .build();
-            savedId = partnerSellerRepository.save(partnerSeller).getId();
+            var savedSeller = partnerSellerRepository.save(partnerSeller);
+            log.info("Successfully registered SELLER '{}' in dedicated partner_sellers table for organisation '{}'",
+                    normalizedEmail, organisation.getLegalName());
+            return mapToUserProfileResponse(savedSeller);
         } else {
             com.stockbridge.accounts.entity.WholesaleBuyer wholesaleBuyer = com.stockbridge.accounts.entity.WholesaleBuyer.builder()
                     .organisation(organisation)
@@ -104,26 +109,11 @@ public class AuthServiceImpl implements AuthService {
                     .passwordHash(encodedPassword)
                     .enabled(true)
                     .build();
-            savedId = wholesaleBuyerRepository.save(wholesaleBuyer).getId();
+            var savedBuyer = wholesaleBuyerRepository.save(wholesaleBuyer);
+            log.info("Successfully registered BUYER '{}' in dedicated wholesale_buyers table for organisation '{}'",
+                    normalizedEmail, organisation.getLegalName());
+            return mapToUserProfileResponse(savedBuyer);
         }
-
-        // Also synchronize to app_user table for unified queries
-        AppUser user = AppUser.builder()
-                .id(savedId)
-                .organisation(organisation)
-                .fullName(request.getFullName().trim())
-                .email(normalizedEmail)
-                .phone(request.getPhone().trim())
-                .passwordHash(encodedPassword)
-                .role(request.getRole())
-                .enabled(true)
-                .build();
-        userRepository.save(user);
-
-        log.info("Successfully registered {} '{}' in dedicated table for organisation '{}'",
-                request.getRole(), normalizedEmail, organisation.getLegalName());
-
-        return mapToUserProfileResponse(user);
     }
 
     @Override
