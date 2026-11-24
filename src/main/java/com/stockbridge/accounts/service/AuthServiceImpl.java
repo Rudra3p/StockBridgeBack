@@ -1,6 +1,7 @@
 package com.stockbridge.accounts.service;
 
 import java.util.List;
+import java.util.UUID;
 import com.stockbridge.accounts.dto.*;
 import com.stockbridge.accounts.entity.AppUser;
 import com.stockbridge.accounts.entity.Organisation;
@@ -33,6 +34,7 @@ public class AuthServiceImpl implements AuthService {
     private final OrganisationRepository organisationRepository;
     private final com.stockbridge.accounts.repository.PartnerSellerRepository partnerSellerRepository;
     private final com.stockbridge.accounts.repository.WholesaleBuyerRepository wholesaleBuyerRepository;
+    private final com.stockbridge.accounts.repository.AdminUserRepository adminUserRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
@@ -50,14 +52,17 @@ public class AuthServiceImpl implements AuthService {
 
         String normalizedEmail = request.getEmail().trim().toLowerCase();
 
-        // Check if an account already exists for THIS specific role
-        if (userRepository.existsByEmailAndRole(normalizedEmail, request.getRole())) {
-            throw new DuplicateResourceException("An account with email '" + normalizedEmail + "' is already registered as " + request.getRole() + ".");
+        // 1. Check if an account already exists in the DEDICATED table for this specific user type
+        if (request.getRole() == Role.BUYER && wholesaleBuyerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
+            throw new DuplicateResourceException("An account with email '" + normalizedEmail + "' is already registered as a Wholesale Buyer.");
+        }
+        if (request.getRole() == Role.SELLER && partnerSellerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
+            throw new DuplicateResourceException("An account with email '" + normalizedEmail + "' is already registered as a Partner Seller.");
         }
 
         String normalizedGst = request.getGstNumber().trim().toUpperCase();
 
-        // 1. Find existing Organisation with this GST or create new one
+        // 2. Find existing Organisation with this GST or create new one
         Organisation organisation = organisationRepository.findByGstNumber(normalizedGst)
                 .orElseGet(() -> {
                     Organisation newOrg = Organisation.builder()
@@ -73,49 +78,49 @@ public class AuthServiceImpl implements AuthService {
                     return organisationRepository.save(newOrg);
                 });
 
-        // 2. Persist to dedicated role table as well as unified security table
+        String encodedPassword = passwordEncoder.encode(request.getPassword());
+
+        // 3. Persist to dedicated separate table
+        UUID savedId;
         if (request.getRole() == Role.SELLER) {
-            if (!partnerSellerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
-                com.stockbridge.accounts.entity.PartnerSeller partnerSeller = com.stockbridge.accounts.entity.PartnerSeller.builder()
-                        .organisation(organisation)
-                        .fullName(request.getFullName().trim())
-                        .email(normalizedEmail)
-                        .phone(request.getPhone().trim())
-                        .passwordHash(passwordEncoder.encode(request.getPassword()))
-                        .enabled(true)
-                        .build();
-                partnerSellerRepository.save(partnerSeller);
-            }
-        } else if (request.getRole() == Role.BUYER) {
-            if (!wholesaleBuyerRepository.existsByEmailIgnoreCase(normalizedEmail)) {
-                com.stockbridge.accounts.entity.WholesaleBuyer wholesaleBuyer = com.stockbridge.accounts.entity.WholesaleBuyer.builder()
-                        .organisation(organisation)
-                        .fullName(request.getFullName().trim())
-                        .email(normalizedEmail)
-                        .phone(request.getPhone().trim())
-                        .passwordHash(passwordEncoder.encode(request.getPassword()))
-                        .enabled(true)
-                        .build();
-                wholesaleBuyerRepository.save(wholesaleBuyer);
-            }
+            com.stockbridge.accounts.entity.PartnerSeller partnerSeller = com.stockbridge.accounts.entity.PartnerSeller.builder()
+                    .organisation(organisation)
+                    .fullName(request.getFullName().trim())
+                    .email(normalizedEmail)
+                    .phone(request.getPhone().trim())
+                    .passwordHash(encodedPassword)
+                    .enabled(true)
+                    .build();
+            savedId = partnerSellerRepository.save(partnerSeller).getId();
+        } else {
+            com.stockbridge.accounts.entity.WholesaleBuyer wholesaleBuyer = com.stockbridge.accounts.entity.WholesaleBuyer.builder()
+                    .organisation(organisation)
+                    .fullName(request.getFullName().trim())
+                    .email(normalizedEmail)
+                    .phone(request.getPhone().trim())
+                    .passwordHash(encodedPassword)
+                    .enabled(true)
+                    .build();
+            savedId = wholesaleBuyerRepository.save(wholesaleBuyer).getId();
         }
 
+        // Also synchronize to app_user table for unified queries
         AppUser user = AppUser.builder()
+                .id(savedId)
                 .organisation(organisation)
                 .fullName(request.getFullName().trim())
                 .email(normalizedEmail)
                 .phone(request.getPhone().trim())
-                .passwordHash(passwordEncoder.encode(request.getPassword()))
+                .passwordHash(encodedPassword)
                 .role(request.getRole())
                 .enabled(true)
                 .build();
+        userRepository.save(user);
 
-        AppUser savedUser = userRepository.save(user);
+        log.info("Successfully registered {} '{}' in dedicated table for organisation '{}'",
+                request.getRole(), normalizedEmail, organisation.getLegalName());
 
-        log.info("Successfully registered user '{}' with role '{}' for organisation '{}' (id: {})",
-                savedUser.getEmail(), savedUser.getRole(), organisation.getLegalName(), organisation.getId());
-
-        return mapToUserProfileResponse(savedUser);
+        return mapToUserProfileResponse(user);
     }
 
     @Override
@@ -124,6 +129,73 @@ public class AuthServiceImpl implements AuthService {
         String normalizedEmail = request.getEmail().trim().toLowerCase();
         Role targetRole = request.getRole();
 
+        // 1. Authenticate against dedicated table if role is specified
+        if (targetRole == Role.BUYER) {
+            var buyerOpt = wholesaleBuyerRepository.findByEmailIgnoreCase(normalizedEmail);
+            if (buyerOpt.isPresent()) {
+                var buyer = buyerOpt.get();
+                if (!passwordEncoder.matches(request.getPassword(), buyer.getPasswordHash())) {
+                    throw new BadCredentialsException("Invalid email or password");
+                }
+                UserPrincipal principal = new UserPrincipal(buyer);
+                String token = jwtService.generateToken(principal);
+                return AuthResponse.builder()
+                        .token(token)
+                        .user(UserInfoResponse.builder()
+                                .id(buyer.getId())
+                                .name(buyer.getFullName())
+                                .email(buyer.getEmail())
+                                .role(Role.BUYER)
+                                .organisationId(buyer.getOrganisation().getId())
+                                .verificationStatus(buyer.getOrganisation().getVerificationStatus())
+                                .build())
+                        .build();
+            }
+        } else if (targetRole == Role.SELLER) {
+            var sellerOpt = partnerSellerRepository.findByEmailIgnoreCase(normalizedEmail);
+            if (sellerOpt.isPresent()) {
+                var seller = sellerOpt.get();
+                if (!passwordEncoder.matches(request.getPassword(), seller.getPasswordHash())) {
+                    throw new BadCredentialsException("Invalid email or password");
+                }
+                UserPrincipal principal = new UserPrincipal(seller);
+                String token = jwtService.generateToken(principal);
+                return AuthResponse.builder()
+                        .token(token)
+                        .user(UserInfoResponse.builder()
+                                .id(seller.getId())
+                                .name(seller.getFullName())
+                                .email(seller.getEmail())
+                                .role(Role.SELLER)
+                                .organisationId(seller.getOrganisation().getId())
+                                .verificationStatus(seller.getOrganisation().getVerificationStatus())
+                                .build())
+                        .build();
+            }
+        } else if (targetRole == Role.ADMIN) {
+            var adminOpt = adminUserRepository.findByEmailIgnoreCase(normalizedEmail);
+            if (adminOpt.isPresent()) {
+                var admin = adminOpt.get();
+                if (!passwordEncoder.matches(request.getPassword(), admin.getPasswordHash())) {
+                    throw new BadCredentialsException("Invalid email or password");
+                }
+                UserPrincipal principal = new UserPrincipal(admin);
+                String token = jwtService.generateToken(principal);
+                return AuthResponse.builder()
+                        .token(token)
+                        .user(UserInfoResponse.builder()
+                                .id(admin.getId())
+                                .name(admin.getFullName())
+                                .email(admin.getEmail())
+                                .role(Role.ADMIN)
+                                .organisationId(null)
+                                .verificationStatus(VerificationStatus.APPROVED)
+                                .build())
+                        .build();
+            }
+        }
+
+        // Fallback to app_user repository
         AppUser user;
         if (targetRole != null) {
             user = userRepository.findByEmailAndRole(normalizedEmail, targetRole)
@@ -133,7 +205,6 @@ public class AuthServiceImpl implements AuthService {
             if (users.isEmpty()) {
                 throw new BadCredentialsException("Invalid email or password");
             }
-            // Find user whose password matches
             user = users.stream()
                     .filter(u -> passwordEncoder.matches(request.getPassword(), u.getPasswordHash()))
                     .findFirst()
@@ -141,29 +212,22 @@ public class AuthServiceImpl implements AuthService {
         }
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            log.warn("Failed password authentication attempt for email '{}'", normalizedEmail);
             throw new BadCredentialsException("Invalid email or password");
-        }
-
-        if (!user.isEnabled()) {
-            throw new BadCredentialsException("Account is disabled. Please contact support.");
         }
 
         UserPrincipal userPrincipal = new UserPrincipal(user);
         String token = jwtService.generateToken(userPrincipal);
 
-        UserInfoResponse userInfo = UserInfoResponse.builder()
-                .id(user.getId())
-                .name(user.getFullName())
-                .email(user.getEmail())
-                .role(user.getRole())
-                .organisationId(user.getOrganisation().getId())
-                .verificationStatus(user.getOrganisation().getVerificationStatus())
-                .build();
-
         return AuthResponse.builder()
                 .token(token)
-                .user(userInfo)
+                .user(UserInfoResponse.builder()
+                        .id(user.getId())
+                        .name(user.getFullName())
+                        .email(user.getEmail())
+                        .role(user.getRole())
+                        .organisationId(user.getOrganisation() != null ? user.getOrganisation().getId() : null)
+                        .verificationStatus(user.getOrganisation() != null ? user.getOrganisation().getVerificationStatus() : VerificationStatus.APPROVED)
+                        .build())
                 .build();
     }
 
@@ -180,7 +244,7 @@ public class AuthServiceImpl implements AuthService {
 
     private UserProfileResponse mapToUserProfileResponse(AppUser user) {
         Organisation org = user.getOrganisation();
-        OrganisationSummaryDto orgSummary = OrganisationSummaryDto.builder()
+        OrganisationSummaryDto orgSummary = org != null ? OrganisationSummaryDto.builder()
                 .id(org.getId())
                 .legalName(org.getLegalName())
                 .orgType(org.getOrgType())
@@ -192,7 +256,7 @@ public class AuthServiceImpl implements AuthService {
                 .verificationStatus(org.getVerificationStatus())
                 .createdAt(org.getCreatedAt())
                 .updatedAt(org.getUpdatedAt())
-                .build();
+                .build() : null;
 
         return UserProfileResponse.builder()
                 .id(user.getId())
